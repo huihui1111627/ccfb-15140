@@ -16,3 +16,8 @@ node_modules/
 __pycache__/
 .venv/
 venv/
+
+# Generated run artifacts (regenerate with `python3 -m gcsim.cli report`)
+reports/*.json
+reports/*.log
+samples/*.hotspot.log

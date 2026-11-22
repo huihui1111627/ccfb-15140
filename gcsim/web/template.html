@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分代 GC 仿真与调优工作台</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel2: #1e222b;
+    --line: #2a2f3a;
+    --text: #e6e8ee;
+    --muted: #8b93a7;
+    --accent: #6ea8fe;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --old: #f472b6;
+    --surv: #34d399;
+    --eden: #60a5fa;
+    --young: #60a5fa;
+    --full: #f87171;
+    --conc: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: rgba(15,17,21,.94);
+    border-bottom: 1px solid var(--line); backdrop-filter: blur(8px);
+    padding: 10px 18px; display: flex; gap: 18px; align-items: center;
+    flex-wrap: wrap;
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+  h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--muted); }
+  .spacer { flex: 1; }
+  select, button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; font: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--accent); }
+  .tabs { display: flex; gap: 4px; }
+  .tab {
+    padding: 5px 12px; border-radius: 6px; cursor: pointer; color: var(--muted);
+    border: 1px solid transparent;
+  }
+  .tab.active { color: var(--text); background: var(--panel2); border-color: var(--line); }
+  main { padding: 16px 18px 48px; max-width: 1500px; margin: 0 auto; }
+  .grid { display: grid; gap: 14px; }
+  .cols2 { grid-template-columns: 1fr 1fr; }
+  .cols3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 1100px) { .cols2, .cols3 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px;
+  }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .kpi {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .kpi .label { color: var(--muted); font-size: 11px; }
+  .kpi .value { font-size: 19px; font-weight: 600; margin-top: 2px; }
+  .kpi .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: right; padding: 5px 7px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  tr:hover td { background: var(--panel2); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  svg { display: block; width: 100%; overflow: visible; }
+  .axis line, .axis path { stroke: var(--line); }
+  .axis text, .glabel { fill: var(--muted); font-size: 10px; }
+  .gridline { stroke: #232833; }
+  .tooltip {
+    position: fixed; pointer-events: none; background: #0b0d11; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px;
+    font-size: 11px; z-index: 100; display: none; max-width: 320px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  }
+  .note { color: var(--muted); font-size: 11px; line-height: 1.6; }
+  .pill {
+    display: inline-block; padding: 1px 7px; border-radius: 999px;
+    font-size: 11px; border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.good { color: var(--good); border-color: #1f5136; }
+  .pill.bad { color: var(--bad); border-color: #5b2626; }
+  .pill.warn { color: var(--warn); border-color: #5b4a1f; }
+  pre {
+    background: #0b0d11; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; overflow: auto; font-size: 11px; line-height: 1.45;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .nowrap { white-space: nowrap; }
+  .barrow { display: flex; align-items: center; gap: 8px; font-size: 11px; margin: 3px 0; }
+  .barrow .name { width: 116px; color: var(--muted); flex: none; text-align: right; }
+  .barrow .track { flex: 1; background: #232833; border-radius: 3px; height: 14px; overflow: hidden; }
+  .barrow .fill { height: 100%; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>分代 GC 仿真与参数调优工作台</h1>
+  <div class="tabs" id="tabs"></div>
+  <div class="spacer"></div>
+  <label class="note">服务：</label>
+  <select id="scenarioSelect"></select>
+  <label class="note">视角：</label>
+  <select id="viewSelect">
+    <option value="before">调优前（默认参数）</option>
+    <option value="after">调优后</option>
+  </select>
+</header>
+<main>
+  <section id="tab-overview">
+    <div class="grid">
+      <div class="card">
+        <h2>验收总览</h2>
+        <div id="overviewTable"></div>
+        <p class="note" id="overviewNote"></p>
+      </div>
+      <div class="grid cols2">
+        <div class="card">
+          <h2>调优前后对比（当前服务）</h2>
+          <div id="compareTable"></div>
+        </div>
+        <div class="card">
+          <h2>停顿时间分布</h2>
+          <div id="pauseHist"></div>
+          <div class="legend" id="pauseLegend"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-timeline" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>各代占用随时间的变化（一整天）</h2>
+        <div id="timeline"></div>
+        <div class="legend">
+          <span><span class="swatch" style="background:var(--eden)"></span>新生代 eden</span>
+          <span><span class="swatch" style="background:var(--surv)"></span>幸存区 survivor</span>
+          <span><span class="swatch" style="background:var(--old)"></span>老年代</span>
+          <span><span class="swatch" style="background:var(--full)"></span>全堆停顿</span>
+          <span><span class="swatch" style="background:var(--conc)"></span>并发周期</span>
+        </div>
+      </div>
+      <div class="grid cols2">
+        <div class="card">
+          <h2>每分钟 GC 停顿与次数</h2>
+          <div id="pausePerMinute"></div>
+        </div>
+        <div class="card">
+          <h2>晋升速率与分配速率</h2>
+          <div id="ratesChart"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-pauses" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>每一次回收的停顿</h2>
+        <div id="pauseScatter"></div>
+        <div class="legend">
+          <span><span class="swatch" style="background:var(--young)"></span>新生代 GC</span>
+          <span><span class="swatch" style="background:var(--full)"></span>全堆停顿</span>
+          <span><span class="swatch" style="background:var(--conc)"></span>并发初始/重标记</span>
+        </div>
+      </div>
+      <div class="grid cols2">
+        <div class="card">
+          <h2>停顿量化表</h2>
+          <div id="pauseStats"></div>
+        </div>
+        <div class="card">
+          <h2>全堆停顿的原因</h2>
+          <div id="reasonTable"></div>
+          <p class="note">并发标记追不上晋升与分配时，并发周期会退化为全堆停顿式回收。这是高峰时段长停顿的机制。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-ages" class="hidden">
+    <div class="grid cols2">
+      <div class="card">
+        <h2>对象年龄分布（存活新生代对象，按字节）</h2>
+        <div id="ageChart"></div>
+        <p class="note">年龄 = 熬过的新生代回收次数。柱高为该年龄的存活字节占比。虚线为晋升阈值。</p>
+      </div>
+      <div class="card">
+        <h2>晋升对象的年龄分布</h2>
+        <div id="promotedAgeChart"></div>
+        <p class="note">年龄小于阈值的部分来自幸存区溢出导致的提前晋升，正是它慢慢填满老年代。</p>
+      </div>
+      <div class="card">
+        <h2>对象寿命分布（三类对象）</h2>
+        <div id="lifetimeChart"></div>
+        <p class="note">请求对象几乎立即死亡；会话对象中等寿命，最容易被过早晋升；缓存对象长期存活。</p>
+      </div>
+      <div class="card">
+        <h2>晋升量按对象类别</h2>
+        <div id="promoteByClass"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-tuning" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>调参结果</h2>
+        <div id="tuningSummary"></div>
+      </div>
+      <div class="card">
+        <h2>每个参数改动的后果（单因子消融）</h2>
+        <div id="effectsTable"></div>
+      </div>
+      <div class="card">
+        <h2>候选配置排名</h2>
+        <div id="rankingTable"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-calibration" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>反向校准：从 GC 日志估出的参数 vs 真实设置</h2>
+        <div style="margin-bottom:8px">
+          <select id="calibWhich">
+            <option value="before">调优前的日志</option>
+            <option value="after">调优后的日志</option>
+          </select>
+        </div>
+        <div id="calibTable"></div>
+        <p class="note" id="calibNote"></p>
+      </div>
+      <div class="grid cols2">
+        <div class="card">
+          <h2>日志样例（HotSpot 风格）</h2>
+          <pre id="logExcerpt"></pre>
+        </div>
+        <div class="card">
+          <h2>从日志反推的各代占用</h2>
+          <div id="calibOccupancy"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+"use strict";
+const DATA = __DATA__;
+const $ = (s) => document.querySelector(s);
+const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—"
+  : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(d));
+const pct = (v, d = 2) => (v === null || v === undefined) ? "—" : (v * 100).toFixed(d) + "%";
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const SVG_NS = "http://www.w3.org/2000/svg";
+const PALETTE = {
+  eden: "#60a5fa", surv: "#34d399", old: "#f472b6",
+  young: "#60a5fa", full: "#f87171", conc: "#a78bfa",
+  accent: "#6ea8fe", good: "#4ade80", warn: "#fbbf24", bad: "#f87171",
+  req: "#60a5fa", ses: "#fbbf24", cac: "#a78bfa"
+};
+
+// ---------------------------------------------------------------------------
+// Data navigation
+// ---------------------------------------------------------------------------
+let state = { scenario: 0, view: "before", calib: "before" };
+const scenarios = DATA.scenarios;
+function cur() { return scenarios[state.scenario]; }
+function viewData() { return cur()[state.view]; }
+
+// ---------------------------------------------------------------------------
+// DOM helpers
+// ---------------------------------------------------------------------------
+function el(tag, attrs = {}, children = []) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "html") e.innerHTML = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+function svgEl(tag, attrs = {}) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+
+// ---------------------------------------------------------------------------
+// Charts (plain SVG)
+// ---------------------------------------------------------------------------
+function chart(host, opts) {
+  host.innerHTML = "";
+  const W = host.clientWidth || 900, H = opts.height || 260;
+  const m = { l: 58, r: 16, t: 14, b: 28 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, height: H });
+  const x = (v) => m.l + (v - opts.xMin) / (opts.xMax - opts.xMin || 1) * iw;
+  const y = (v) => m.t + ih - (v - opts.yMin) / (opts.yMax - opts.yMin || 1) * ih;
+  // gridlines + y labels
+  const yTicks = opts.yTicks || 5;
+  for (let i = 0; i <= yTicks; i++) {
+    const v = opts.yMin + (opts.yMax - opts.yMin) * i / yTicks;
+    const yy = y(v);
+    svg.appendChild(svgEl("line", { x1: m.l, x2: W - m.r, y1: yy, y2: yy, class: "gridline" }));
+    const t = svgEl("text", { x: m.l - 7, y: yy + 3.5, "text-anchor": "end", class: "glabel" });
+    t.textContent = opts.yFormat ? opts.yFormat(v) : fmt(v);
+    svg.appendChild(t);
+  }
+  // x labels
+  const xTicks = opts.xTicks || 6;
+  for (let i = 0; i <= xTicks; i++) {
+    const v = opts.xMin + (opts.xMax - opts.xMin) * i / xTicks;
+    const t = svgEl("text", { x: x(v), y: H - 8, "text-anchor": "middle", class: "glabel" });
+    t.textContent = opts.xFormat ? opts.xFormat(v) : fmt(v);
+    svg.appendChild(t);
+  }
+  if (opts.yLabel) {
+    const t = svgEl("text", { x: 12, y: m.t + ih / 2, "text-anchor": "middle",
+      transform: `rotate(-90 12 ${m.t + ih / 2})`, class: "glabel" });
+    t.textContent = opts.yLabel;
+    svg.appendChild(t);
+  }
+  const clip = svgEl("clipPath", { id: "clip-" + Math.random().toString(36).slice(2) });
+  const rect = svgEl("rect", { x: m.l, y: m.t, width: iw, height: ih });
+  clip.appendChild(rect);
+  svg.appendChild(clip);
+  const g = svgEl("g", { "clip-path": `url(#${clip.id})` });
+  svg.appendChild(g);
+  host.appendChild(svg);
+  return { svg, g, x, y, W, H, m, iw, ih };
+}
+
+function addTooltip(node, html) {
+  node.addEventListener("mousemove", (ev) => {
+    const tt = $("#tooltip");
+    tt.innerHTML = html;
+    tt.style.display = "block";
+    tt.style.left = Math.min(ev.clientX + 14, window.innerWidth - 330) + "px";
+    tt.style.top = (ev.clientY + 14) + "px";
+  });
+  node.addEventListener("mouseleave", () => { $("#tooltip").style.display = "none"; });
+}
+
+function areaPath(c, pts, y0) {
+  if (!pts.length) return "";
+  let d = `M ${c.x(pts[0][0])} ${c.y(y0)}`;
+  for (const [px, py] of pts) d += ` L ${c.x(px)} ${c.y(py)}`;
+  d += ` L ${c.x(pts[pts.length - 1][0])} ${c.y(y0)} Z`;
+  return d;
+}
+function linePath(c, pts) {
+  if (!pts.length) return "";
+  return pts.map(([px, py], i) => `${i ? "L" : "M"} ${c.x(px)} ${c.y(py)}`).join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+const TABS = [
+  ["overview", "总览"], ["timeline", "各代占用/时间线"],
+  ["pauses", "停顿"], ["ages", "年龄分布"],
+  ["tuning", "调参"], ["calibration", "反向校准"],
+];
+let activeTab = "overview";
+function buildTabs() {
+  const host = $("#tabs");
+  host.innerHTML = "";
+  for (const [key, label] of TABS) {
+    const b = el("div", { class: "tab" + (key === activeTab ? " active" : ""), onclick: () => {
+      activeTab = key; buildTabs(); renderAll();
+    } }, label);
+    host.appendChild(b);
+  }
+  for (const [key] of TABS) {
+    $("#tab-" + key).classList.toggle("hidden", key !== activeTab);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------
+function kpi(label, value, sub, cls = "") {
+  return el("div", { class: "kpi" }, [
+    el("div", { class: "label" }, label),
+    el("div", { class: "value " + cls }, value),
+    el("div", { class: "sub" }, sub),
+  ]);
+}
+function renderOverview() {
+  const host = $("#overviewTable");
+  host.innerHTML = "";
+  const t = el("table");
+  t.appendChild(el("tr", {}, [
+    el("th", {}, "服务"), el("th", {}, "最大停顿"),
+    el("th", {}, "P99 停顿"), el("th", {}, "吞吐损失"),
+    el("th", {}, "全堆停顿次数"), el("th", {}, "退化次数"),
+    el("th", {}, "超预算请求"), el("th", {}, "结论"),
+  ]));
+  for (let i = 0; i < scenarios.length; i++) {
+    const s = scenarios[i];
+    const a = s.after.summary, b = s.before.summary;
+    const obj = s.objective;
+    const ok = a.pause_max_ms <= obj.pause_target_ms
+      && a.throughput_loss_frac <= 1 - obj.throughput_target;
+    const tr = el("tr", { style: i === state.scenario ? "background:#1e222b" : "" }, [
+      el("td", { class: "nowrap" }, [
+        el("a", { href: "#", onclick: (e) => { e.preventDefault(); state.scenario = i; renderAll(); } },
+          s.name),
+      ]),
+      el("td", {}, fmt(b.pause_max_ms, 0) + " → " + fmt(a.pause_max_ms, 0) + " ms"),
+      el("td", {}, fmt(b.pause_p99_ms, 1) + " → " + fmt(a.pause_p99_ms, 1) + " ms"),
+      el("td", {}, pct(b.throughput_loss_frac) + " → " + pct(a.throughput_loss_frac)),
+      el("td", {}, b.full_count + " → " + a.full_count),
+      el("td", {}, b.degenerate_count + " → " + a.degenerate_count),
+      el("td", {}, pct(b.tail_over_budget_frac, 3) + " → " + pct(a.tail_over_budget_frac, 3)),
+      el("td", {}, el("span", { class: "pill " + (ok ? "good" : "bad") },
+        ok ? "满足目标" : "未达标")),
+    ]);
+    t.appendChild(tr);
+  }
+  host.appendChild(t);
+  const obj = cur().objective;
+  $("#overviewNote").textContent =
+    `目标：最长停顿 ≤ ${obj.pause_target_ms} ms，吞吐损失 ≤ ${pct(1 - obj.throughput_target)}，`
+    + `超预算请求占比 ≤ ${pct(obj.tail_frac, 2)}，堆 ≤ ${fmt(obj.max_heap_mib || 0, 0)} MiB。`
+    + `验收覆盖三种对象寿命分布 × 三种流量曲线，各自仿真一整天（86400 秒）。`;
+}
+
+function renderCompare() {
+  const host = $("#compareTable");
+  host.innerHTML = "";
+  const rows = cur().comparison;
+  const t = el("table");
+  t.appendChild(el("tr", {}, [el("th", {}, "指标"), el("th", {}, "调优前"),
+    el("th", {}, "调优后"), el("th", {}, "变化")]));
+  for (const r of rows) {
+    const better = r.delta === null ? null : (r.delta < 0);
+    const cls = better === null ? "" : (better ? "good" : (Math.abs(r.delta) < 1e-12 ? "" : "bad"));
+    let bv, av, dv;
+    if (r.unit === "ms") { bv = fmt(r.before, 1); av = fmt(r.after, 1); dv = (r.delta > 0 ? "+" : "") + fmt(r.delta, 1) + " ms"; }
+    else if (r.unit === "MiB/s") { bv = fmt(r.before, 2); av = fmt(r.after, 2); dv = (r.delta > 0 ? "+" : "") + fmt(r.delta, 2); }
+    else if (r.unit === "次") { bv = fmt(r.before, 0); av = fmt(r.after, 0); dv = (r.delta > 0 ? "+" : "") + fmt(r.delta, 0); }
+    else { bv = pct(r.before, 2); av = pct(r.after, 2); dv = (r.delta > 0 ? "+" : "") + pct(r.delta, 2); }
+    t.appendChild(el("tr", {}, [
+      el("td", {}, r.label), el("td", {}, bv), el("td", {}, av),
+      el("td", { class: cls }, dv),
+    ]));
+  }
+  host.appendChild(t);
+}
+
+function renderPauseHist() {
+  const host = $("#pauseHist");
+  const hist = viewData().pause_hist;
+  const keys = Object.keys(hist);
+  const vals = keys.map(k => hist[k]);
+  const maxV = Math.max(...vals, 1);
+  host.innerHTML = "";
+  const H = 190, W = host.clientWidth || 460;
+  const bw = Math.max(6, (W - 40) / keys.length);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, height: H });
+  keys.forEach((k, i) => {
+    const h = (vals[i] / maxV) * (H - 52);
+    const x = 34 + i * bw;
+    const rectBar = svgEl("rect", {
+      x: x + 1, y: H - 30 - h, width: bw - 2, height: Math.max(h, vals[i] ? 2 : 0),
+      fill: parseFloat(k) >= 100 ? PALETTE.full : PALETTE.young,
+      rx: 2,
+    });
+    addTooltip(rectBar, `<b>${esc(k)} ms</b><br>${vals[i]} 次`);
+    svg.appendChild(rectBar);
+    if (vals[i]) {
+      const t = svgEl("text", { x: x + bw / 2, y: H - 34 - h, "text-anchor": "middle", class: "glabel" });
+      t.textContent = vals[i] > 999 ? (vals[i] / 1000).toFixed(1) + "k" : vals[i];
+      svg.appendChild(t);
+    }
+    if (i % 2 === 0) {
+      const t = svgEl("text", { x: x + bw / 2, y: H - 14, "text-anchor": "middle", class: "glabel" });
+      t.textContent = k;
+      svg.appendChild(t);
+    }
+  });
+  host.appendChild(svg);
+  $("#pauseLegend").innerHTML =
+    `<span>共 ${viewData().summary.pause_count} 次停顿；红柱为超过 100ms 的长停顿</span>`
+    + `<span>预算 ${viewData().summary.budget_ms} ms</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// Timeline
+// ---------------------------------------------------------------------------
+function renderTimeline() {
+  const d = viewData();
+  const mins = d.minutes;
+  const gc = d.gc;
+  const host = $("#timeline");
+  const maxOld = Math.max(...mins.map(b => b.old), 1);
+  const maxYoung = gc.eden_bytes + 2 * gc.survivor_bytes;
+  const yMax = Math.max(maxOld * 1.1, maxYoung) / 1048576;
+  const c = chart(host, {
+    height: 300, xMin: 0, xMax: mins.length, yMin: 0, yMax,
+    yLabel: "MiB", xFormat: v => `${String(Math.floor(v / 60)).padStart(2, "0")}:00`,
+    xTicks: 8,
+    yFormat: v => fmt(v, 0),
+  });
+  const t = mins.map(b => b.m);
+  const oldPts = mins.map(b => [b.m, b.old / 1048576]);
+  const survPts = mins.map(b => [b.m, b.survivor / 1048576]);
+  const edenPts = mins.map(b => [b.m, b.eden / 1048576]);
+  // stacked areas: old, old+surv, old+surv+eden
+  const stack = (a, b) => mins.map(m => [m.m, (a(m) + b(m)) / 1048576]);
+  c.g.appendChild(svgEl("path", { d: areaPath(c, oldPts, 0), fill: PALETTE.old, opacity: 0.8 }));
+  c.g.appendChild(svgEl("path", { d: areaPath(c, stack(m => m.old, m => m.survivor), 0), fill: PALETTE.surv, opacity: 0.8 }));
+  c.g.appendChild(svgEl("path", { d: areaPath(c, stack(m => m.old + m.survivor, m => m.eden), 0), fill: PALETTE.eden, opacity: 0.5 }));
+  // full GC markers
+  const fulls = d.events.filter(e => e.kind === 3);
+  for (const e of fulls) {
+    c.g.appendChild(svgEl("line", {
+      x1: c.x(e.t / 60), x2: c.x(e.t / 60), y1: c.m.t, y2: c.m.t + c.ih,
+      stroke: PALETTE.full, "stroke-width": 1, opacity: 0.35,
+    }));
+  }
+  const concs = d.events.filter(e => e.kind === 1);
+  for (const e of concs) {
+    c.g.appendChild(svgEl("circle", {
+      cx: c.x(e.t / 60), cy: c.m.t + 6, r: 2.2, fill: PALETTE.conc, opacity: 0.8,
+    }));
+  }
+  // hover overlay
+  const over = svgEl("rect", { x: c.m.l, y: c.m.t, width: c.iw, height: c.ih, fill: "transparent" });
+  addTooltip(over, "");
+  over.addEventListener("mousemove", (ev) => {
+    const r = over.getBoundingClientRect();
+    const frac = (ev.clientX - r.left) / r.width;
+    const idx = Math.max(0, Math.min(mins.length - 1, Math.round(frac * (mins.length - 1))));
+    const b = mins[idx];
+    $("#tooltip").innerHTML =
+      `<b>${String(Math.floor(b.m / 60)).padStart(2, "0")}:${String(b.m % 60).padStart(2, "0")}</b><br>`
+      + `老年代 ${fmt(b.old / 1048576)} MiB<br>幸存区 ${fmt(b.survivor / 1048576)} MiB<br>`
+      + `新生代 ${fmt(b.eden / 1048576)} MiB<br>分配 ${fmt(b.alloc_rate_mibs)} MiB/s<br>`
+      + `晋升 ${fmt(b.promoted_mibs)} MiB/s<br>停顿 ${fmt(b.pause_ms, 0)} ms / ${b.minor_count + b.full_count} 次`;
+  });
+  c.g.appendChild(over);
+}
+
+function renderPausePerMinute() {
+  const d = viewData();
+  const mins = d.minutes;
+  const host = $("#pausePerMinute");
+  const maxP = Math.max(...mins.map(b => b.pause_ms), 1);
+  const c = chart(host, {
+    height: 210, xMin: 0, xMax: mins.length, yMin: 0, yMax: maxP * 1.1,
+    yLabel: "ms/min", xFormat: v => `${String(Math.floor(v / 60)).padStart(2, "0")}:00`,
+    xTicks: 6,
+  });
+  for (const b of mins) {
+    const h = (b.pause_ms / (maxP * 1.1)) * c.ih;
+    const rectBar = svgEl("rect", {
+      x: c.x(b.m), y: c.m.t + c.ih - h, width: Math.max(1, c.iw / mins.length),
+      height: Math.max(h, 0), fill: b.full_pause_ms > 0 ? PALETTE.full : PALETTE.young, opacity: 0.8,
+    });
+    addTooltip(rectBar, `<b>${b.m}</b> 分钟<br>停顿 ${fmt(b.pause_ms)} ms<br>`
+      + `中位数 ${fmt(b.max_pause_ms)} ms 最长<br>minor ${b.minor_count} / full ${b.full_count}`);
+    c.g.appendChild(rectBar);
+  }
+}
+
+function renderRates() {
+  const d = viewData();
+  const mins = d.minutes;
+  const host = $("#ratesChart");
+  const maxA = Math.max(...mins.map(b => b.alloc_rate_mibs), 1);
+  const maxP = Math.max(...mins.map(b => b.promoted_mibs), 1);
+  const yMax = Math.max(maxA, maxP) * 1.1;
+  const c = chart(host, {
+    height: 210, xMin: 0, xMax: mins.length, yMin: 0, yMax,
+    yLabel: "MiB/s", xFormat: v => `${String(Math.floor(v / 60)).padStart(2, "0")}:00`,
+    xTicks: 6,
+  });
+  c.g.appendChild(svgEl("path", {
+    d: areaPath(c, mins.map(b => [b.m, b.alloc_rate_mibs]), 0),
+    fill: PALETTE.eden, opacity: 0.25 }));
+  c.g.appendChild(svgEl("path", {
+    d: linePath(c, mins.map(b => [b.m, b.alloc_rate_mibs])),
+    fill: "none", stroke: PALETTE.eden, "stroke-width": 1.4 }));
+  c.g.appendChild(svgEl("path", {
+    d: linePath(c, mins.map(b => [b.m, b.promoted_mibs])),
+    fill: "none", stroke: PALETTE.old, "stroke-width": 1.6 }));
+  const over = svgEl("rect", { x: c.m.l, y: c.m.t, width: c.iw, height: c.ih, fill: "transparent" });
+  over.addEventListener("mousemove", (ev) => {
+    const r = over.getBoundingClientRect();
+    const idx = Math.max(0, Math.min(mins.length - 1,
+      Math.round((ev.clientX - r.left) / r.width * (mins.length - 1))));
+    const b = mins[idx];
+    $("#tooltip").innerHTML = `<b>${b.m} 分钟</b><br>分配 ${fmt(b.alloc_rate_mibs)} MiB/s<br>`
+      + `晋升 ${fmt(b.promoted_mibs)} MiB/s`;
+  });
+  c.g.appendChild(over);
+  $("#ratesChart").insertAdjacentHTML("beforeend",
+    `<div class="legend"><span><span class="swatch" style="background:${PALETTE.eden}"></span>分配速率</span>
+     <span><span class="swatch" style="background:${PALETTE.old}"></span>晋升速率</span></div>`);
+}
+
+// ---------------------------------------------------------------------------
+// Pauses
+// ---------------------------------------------------------------------------
+function renderPauseScatter() {
+  const d = viewData();
+  const evs = d.events.filter(e => e.pause_ms > 0 && e.kind !== 3 ? true : e.pause_ms > 0);
+  const host = $("#pauseScatter");
+  const day = d.summary.day_seconds || 86400;
+  const maxP = Math.max(...evs.map(e => e.pause_ms), 1);
+  const c = chart(host, {
+    height: 280, xMin: 0, xMax: day / 3600, yMin: 0, yMax: maxP * 1.08,
+    yLabel: "pause ms", xFormat: v => `${fmt(v, 0)}h`, xTicks: 8,
+  });
+  const groups = { young: [], full: [], conc: [] };
+  for (const e of evs) {
+    const k = e.kind === 3 ? "full" : (e.kind === 0 ? "young" : "conc");
+    groups[k].push(e);
+  }
+  for (const [k, arr] of Object.entries(groups)) {
+    const col = k === "full" ? PALETTE.full : (k === "young" ? PALETTE.young : PALETTE.conc);
+    for (const e of arr) {
+      const x = c.x(e.t / 3600);
+      const y = c.y(e.pause_ms);
+      const node = arr.length > 1500
+        ? svgEl("line", { x1: x, x2: x, y1: c.y(0), y2: y, stroke: col, "stroke-width": 0.6, opacity: 0.35 })
+        : svgEl("circle", { cx: x, cy: y, r: k === "full" ? 3 : 1.8, fill: col, opacity: k === "full" ? 0.9 : 0.55 });
+      addTooltip(node, `<b>${e.kind_name}</b> @ ${fmt(e.t / 60, 0)} min<br>`
+        + `停顿 ${fmt(e.pause_ms, 1)} ms<br>`
+        + (e.kind === 3 ? `原因：${esc(e.reason)}<br>存活 ${fmt(e.live_bytes / 1048576)} MiB`
+           : `晋升 ${fmt(e.promoted_bytes / 1048576, 2)} MiB<br>阈值 ${e.tenuring}`));
+      c.g.appendChild(node);
+    }
+  }
+}
+
+function renderPauseStats() {
+  const s = viewData().summary;
+  const host = $("#pauseStats");
+  const rows = [
+    ["停顿次数", s.pause_count, ""],
+    ["平均", fmt(s.pause_mean_ms), "ms"],
+    ["P50", fmt(s.pause_p50_ms), "ms"],
+    ["P95", fmt(s.pause_p95_ms), "ms"],
+    ["P99", fmt(s.pause_p99_ms), "ms"],
+    ["P99.9", fmt(s.pause_p999_ms), "ms"],
+    ["最长", fmt(s.pause_max_ms), "ms"],
+    ["新生代 P50 / 最长", `${fmt(s.minor_pause_p50_ms)} / ${fmt(s.minor_pause_max_ms)}`, "ms"],
+    ["全堆 P50 / 最长", `${fmt(s.full_pause_p50_ms)} / ${fmt(s.full_pause_max_ms)}`, "ms"],
+    ["超过预算", s.budget_breaches, "次"],
+  ];
+  const t = el("table");
+  for (const [k, v, u] of rows) t.appendChild(el("tr", {}, [
+    el("td", {}, k), el("td", {}, String(v)), el("td", { class: "note" }, u)]));
+  host.innerHTML = ""; host.appendChild(t);
+}
+
+function renderReasons() {
+  const s = viewData().summary;
+  const host = $("#reasonTable");
+  const map = s.full_reason_labels || {};
+  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
+  host.innerHTML = "";
+  if (!entries.length) {
+    host.innerHTML = `<p class="note good">本次运行没有发生全堆停顿。</p>`;
+    return;
+  }
+  const total = entries.reduce((a, [, v]) => a + v, 0);
+  for (const [k, v] of entries) {
+    host.appendChild(el("div", { class: "barrow" }, [
+      el("div", { class: "name" }, k),
+      el("div", { class: "track" }, el("div", { class: "fill",
+        style: `width:${(v / total * 100).toFixed(1)}%;background:${PALETTE.full}` })),
+      el("div", { style: "width:62px;text-align:right" }, `${v} 次`),
+    ]));
+  }
+  host.appendChild(el("p", { class: "note" },
+    `共 ${total} 次全堆停顿；其中并发退化 ${s.degenerate_count} 次。`));
+}
+
+// ---------------------------------------------------------------------------
+// Ages
+// ---------------------------------------------------------------------------
+function renderAgeChart() {
+  const d = viewData();
+  const hist = d.age_hist || {};
+  const host = $("#ageChart");
+  const ages = hist.age || [];
+  const bytes = hist.bytes || [];
+  const total = bytes.reduce((a, b) => a + b, 0) || 1;
+  host.innerHTML = "";
+  if (!ages.length) { host.innerHTML = `<p class="note">无数据</p>`; return; }
+  const H = 210, W = host.clientWidth || 460;
+  const n = ages.length;
+  const bw = Math.min(46, (W - 50) / n);
+  const maxV = Math.max(...bytes, 1);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, height: H });
+  ages.forEach((a, i) => {
+    const v = bytes[i] / total;
+    const h = (bytes[i] / maxV) * (H - 56);
+    const x = 40 + i * bw;
+    const r = svgEl("rect", { x, y: H - 32 - h, width: bw - 4, height: Math.max(h, 0),
+      fill: PALETTE.young, rx: 2, opacity: 0.85 });
+    addTooltip(r, `年龄 ${a}<br>${pct(v, 2)} 的存活字节`);
+    svg.appendChild(r);
+    if (bytes[i] / total > 0.04) {
+      const t = svgEl("text", { x: x + (bw - 4) / 2, y: H - 36 - h, "text-anchor": "middle", class: "glabel" });
+      t.textContent = pct(v, 1);
+      svg.appendChild(t);
+    }
+    const t2 = svgEl("text", { x: x + (bw - 4) / 2, y: H - 16, "text-anchor": "middle", class: "glabel" });
+    t2.textContent = a;
+    svg.appendChild(t2);
+  });
+  const thr = d.gc.tenuring_threshold;
+  const tx = 40 + (thr + 0.5) * bw;
+  svg.appendChild(svgEl("line", { x1: tx, x2: tx, y1: 14, y2: H - 30,
+    stroke: PALETTE.warn, "stroke-dasharray": "4 3", "stroke-width": 1.3 }));
+  const tl = svgEl("text", { x: tx + 4, y: 20, class: "glabel", fill: PALETTE.warn });
+  tl.textContent = `阈值 ${thr}`;
+  svg.appendChild(tl);
+  const yl = svgEl("text", { x: 12, y: H / 2, "text-anchor": "middle",
+    transform: `rotate(-90 12 ${H / 2})`, class: "glabel" });
+  yl.textContent = "存活字节占比";
+  svg.appendChild(yl);
+  host.appendChild(svg);
+}
+
+function renderPromotedAge() {
+  const d = viewData();
+  const hist = d.age_hist || {};
+  const host = $("#promotedAgeChart");
+  const ages = hist.age || [];
+  const prom = hist.promoted_bytes || [];
+  const total = prom.reduce((a, b) => a + b, 0) || 1;
+  host.innerHTML = "";
+  if (!ages.length) { host.innerHTML = `<p class="note">无数据</p>`; return; }
+  const H = 210, W = host.clientWidth || 460;
+  const bw = Math.min(46, (W - 50) / ages.length);
+  const maxV = Math.max(...prom, 1);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, height: H });
+  ages.forEach((a, i) => {
+    const h = (prom[i] / maxV) * (H - 56);
+    const x = 40 + i * bw;
+    const early = a < d.gc.tenuring_threshold;
+    const r = svgEl("rect", { x, y: H - 32 - h, width: bw - 4, height: Math.max(h, 0),
+      fill: early ? PALETTE.full : PALETTE.surv, rx: 2, opacity: 0.85 });
+    addTooltip(r, `年龄 ${a}${early ? "（提前晋升）" : ""}<br>${pct(prom[i] / total, 2)} 的晋升字节`);
+    svg.appendChild(r);
+    if (prom[i] > 0) {
+      const t = svgEl("text", { x: x + (bw - 4) / 2, y: H - 36 - h, "text-anchor": "middle", class: "glabel" });
+      t.textContent = pct(prom[i] / total, 1);
+      svg.appendChild(t);
+    }
+    const t2 = svgEl("text", { x: x + (bw - 4) / 2, y: H - 16, "text-anchor": "middle", class: "glabel" });
+    t2.textContent = a;
+    svg.appendChild(t2);
+  });
+  const earlyFrac = ages.reduce((acc, a, i) => acc + (a < d.gc.tenuring_threshold ? prom[i] : 0), 0) / total;
+  host.appendChild(svg);
+  host.appendChild(el("p", { class: "note" },
+    `提前晋升（年龄 < ${d.gc.tenuring_threshold}）占晋升字节的 ${pct(earlyFrac, 1)}。`));
+}
+
+function renderLifetime() {
+  const d = viewData();
+  const host = $("#lifetimeChart");
+  const cls = ["request", "session", "cache"];
+  const labels = { request: "请求对象", session: "会话对象", cache: "缓存对象" };
+  const colors = { request: PALETTE.req, session: PALETTE.ses, cache: PALETTE.cac };
+  const pop = cur().population;
+  const scales = {
+    request: [pop.request_scale_s, pop.request_shape],
+    session: [pop.session_scale_s, pop.session_shape],
+    cache: [pop.cache_scale_s, pop.cache_shape],
+  };
+  host.innerHTML = "";
+  const H = 210, W = host.clientWidth || 460;
+  const m = { l: 44, r: 12, t: 12, b: 26 };
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, height: H });
+  const tMax = Math.log10(Math.max(scales.cache[0] * 4, 10));
+  const tMin = -3;
+  const x = t => m.l + (Math.log10(Math.max(t, 1e-3)) - tMin) / (tMax - tMin) * (W - m.l - m.r);
+  const y = s => m.t + (1 - s) * (H - m.t - m.b);
+  for (let i = 0; i <= 5; i++) {
+    const v = i / 5;
+    svg.appendChild(svgEl("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "gridline" }));
+    const t = svgEl("text", { x: m.l - 6, y: y(v) + 3, "text-anchor": "end", class: "glabel" });
+    t.textContent = (v * 100).toFixed(0) + "%";
+    svg.appendChild(t);
+  }
+  for (const [c, [scale, shape]] of Object.entries(scales)) {
+    const pts = [];
+    for (let i = 0; i <= 120; i++) {
+      const lt = tMin + (tMax - tMin) * i / 120;
+      const t = Math.pow(10, lt);
+      const s = Math.exp(-Math.pow(t / scale, shape));
+      pts.push([t, s]);
+    }
+    let dpath = pts.map(([t, s], i) => `${i ? "L" : "M"} ${x(t)} ${y(s)}`).join(" ");
+    const path = svgEl("path", { d: dpath, fill: "none", stroke: colors[c], "stroke-width": 1.8 });
+    addTooltip(path, `<b>${labels[c]}</b><br>中位寿命 ${fmt(scale * Math.pow(Math.log(2), 1 / shape), 1)} s`);
+    svg.appendChild(path);
+  }
+  for (const t of [0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000]) {
+    if (Math.log10(t) < tMin || Math.log10(t) > tMax) continue;
+    const lbl = svgEl("text", { x: x(t), y: H - 8, "text-anchor": "middle", class: "glabel" });
+    lbl.textContent = t >= 1 ? `${t}s` : `${t * 1000}ms`;
+    svg.appendChild(lbl);
+  }
+  host.appendChild(svg);
+  host.appendChild(el("div", { class: "legend" }, cls.map(c =>
+    el("span", {}, [el("span", { class: "swatch", style: `background:${colors[c]}` }), labels[c]]))));
+}
+
+function renderPromoteByClass() {
+  const d = viewData();
+  const host = $("#promoteByClass");
+  const cs = d.class_stats || {};
+  const prom = cs.promoted_bytes || {};
+  const labels = { request: "请求对象", session: "会话对象", cache: "缓存对象" };
+  const colors = { request: PALETTE.req, session: PALETTE.ses, cache: PALETTE.cac };
+  const total = Object.values(prom).reduce((a, b) => a + b, 0) || 1;
+  host.innerHTML = "";
+  for (const [k, v] of Object.entries(prom)) {
+    const frac = v / total;
+    host.appendChild(el("div", { class: "barrow" }, [
+      el("div", { class: "name" }, labels[k] || k),
+      el("div", { class: "track" }, el("div", { class: "fill",
+        style: `width:${(frac * 100).toFixed(1)}%;background:${colors[k]}` })),
+      el("div", { style: "width:104px;text-align:right" }, `${pct(frac, 1)} · ${fmt(v / 1073741824, 2)} GiB`),
+    ]));
+  }
+  host.appendChild(el("p", { class: "note" },
+    `全天晋升 ${fmt(total / 1073741824, 2)} GiB。会话对象的中等寿命是提前晋升进入老年代的主要来源。`));
+}
+
+// ---------------------------------------------------------------------------
+// Tuning
+// ---------------------------------------------------------------------------
+function renderTuning() {
+  const s = cur();
+  const host = $("#tuningSummary");
+  host.innerHTML = "";
+  const tun = s.tuning;
+  if (!tun) {
+    host.innerHTML = `<p class="note">本次验收未运行参数搜索（--no-tune）。</p>`;
+    return;
+  }
+  const rec = tun.recommendation;
+  const ch = rec.changes;
+  const names = {
+    eden_mib: "新生代 eden", survivor_mib: "幸存区", old_mib: "老年代",
+    tenuring_threshold: "晋升年龄阈值", concurrent_trigger_ratio: "并发触发比例",
+    concurrent_mark_mibs: "并发标记速率",
+  };
+  const units = { eden_mib: " MiB", survivor_mib: " MiB", old_mib: " MiB",
+    tenuring_threshold: " 次", concurrent_trigger_ratio: "", concurrent_mark_mibs: " MiB/s" };
+  if (!s.tuning) return;
+  const grid = el("div", { class: "grid cols3" });
+  const kpis = el("div", { class: "kpis" });
+  kpis.appendChild(kpi("搜索候选数", String(tun.candidates), `可行 ${tun.feasible_count} 个`));
+  kpis.appendChild(kpi("搜索耗时", fmt(tun.wall_s, 0) + " s", `目标：停顿≤${tun.objective.pause_target_ms}ms`));
+  kpis.appendChild(kpi("调优后结论", rec.feasible ? "满足目标" : "未达标",
+    `最长停顿 ${fmt(rec.after.pause_max_ms, 0)} ms`, rec.feasible ? "good" : "bad"));
+  if (tun.objective.max_heap_mib) {
+    kpis.appendChild(kpi("堆内存预算", fmt(tun.objective.max_heap_mib, 0) + " MiB",
+      "搜索不得以加内存换停顿"));
+  }
+  host.appendChild(kpis);
+  host.appendChild(el("h3", { style: "margin-top:14px" }, "推荐参数（调优前 → 调优后）"));
+  const t = el("table");
+  t.appendChild(el("tr", {}, [el("th", {}, "参数"), el("th", {}, "调优前"),
+    el("th", {}, "调优后"), el("th", {}, "说明")]));
+  for (const [k, v] of Object.entries(ch)) {
+    const changed = Math.abs(v[1] - v[0]) > 1e-9;
+    t.appendChild(el("tr", {}, [
+      el("td", {}, names[k] || k),
+      el("td", {}, fmt(v[0], k.includes("ratio") ? 2 : 0) + (units[k] || "")),
+      el("td", { class: changed ? "good" : "" },
+        fmt(v[1], k.includes("ratio") ? 2 : 0) + (units[k] || "")),
+      el("td", { class: "note" }, changed ? "已改动" : "保持"),
+    ]));
+  }
+  host.appendChild(t);
+  host.appendChild(el("p", { class: "note", style: "margin-top:10px" },
+    "搜索方法：先在高峰时段做低成本筛选，再在完整一天上复评，最后做坐标下降精调。"
+    + "目标函数按“满足停顿/吞吐约束优先，其次最小化超预算请求占比”排序。"));
+}
+
+function renderEffects() {
+  const host = $("#effectsTable");
+  host.innerHTML = "";
+  const tun = cur().tuning;
+  if (!tun) { host.innerHTML = `<p class="note">未运行。</p>`; return; }
+  const t = el("table");
+  t.appendChild(el("tr", {}, [el("th", {}, "参数"), el("th", {}, "改动"),
+    el("th", {}, "最长停顿 Δ"), el("th", {}, "全堆停顿 Δ"),
+    el("th", {}, "吞吐损失 Δ"), el("th", {}, "晋升速率 Δ"),
+    el("th", {}, "后果")]));
+  for (const e of tun.effects) {
+    const u = e.unit || "";
+    const f = (v, d) => (v > 0 ? "+" : "") + fmt(v, d);
+    const cls = (v, invert) => {
+      if (Math.abs(v) < 1e-9) return "";
+      const good = invert ? v > 0 : v < 0;
+      return good ? "good" : "bad";
+    };
+    t.appendChild(el("tr", {}, [
+      el("td", { class: "nowrap" }, e.label),
+      el("td", { class: "nowrap" }, `${e.direction} ${fmt(e.from, 2)} → ${fmt(e.to, 2)}${u ? " " + u : ""}`),
+      el("td", { class: cls(e.delta_pause_max_ms) }, f(e.delta_pause_max_ms, 1) + " ms"),
+      el("td", { class: cls(e.delta_full_gcs) }, f(e.delta_full_gcs, 0)),
+      el("td", { class: cls(e.delta_throughput_loss, true) }, f(e.delta_throughput_loss * 100, 3) + " pp"),
+      el("td", { class: cls(e.delta_promoted) }, f(e.delta_promoted, 2) + " MiB/s"),
+      el("td", { class: "note", style: "text-align:left;max-width:420px" }, e.explanation || ""),
+    ]));
+  }
+  host.appendChild(t);
+  host.appendChild(el("p", { class: "note" },
+    "单因子消融：从推荐配置出发，每次只把一个参数移到相邻档位，其余不变；为了消除随机突发流量带来的噪声，"
+    + "这一组对比关闭了突发系数。Δ 为相对推荐配置的变化。"));
+}
+
+function renderRanking() {
+  const host = $("#rankingTable");
+  host.innerHTML = "";
+  const tun = cur().tuning;
+  if (!tun) { host.innerHTML = `<p class="note">未运行。</p>`; return; }
+  const t = el("table");
+  t.appendChild(el("tr", {}, [el("th", {}, "eden"), el("th", {}, "幸存区"),
+    el("th", {}, "老年代"), el("th", {}, "阈值"), el("th", {}, "触发比"),
+    el("th", {}, "标记速率"), el("th", {}, "最长停顿"), el("th", {}, "P99"),
+    el("th", {}, "吞吐损失"), el("th", {}, "全堆"), el("th", {}, "种子数"),
+    el("th", {}, "可行")]));
+  for (const r of tun.ranking.slice(0, 20)) {
+    const p = r.params;
+    t.appendChild(el("tr", {}, [
+      el("td", {}, fmt(p.eden_mib, 0)), el("td", {}, fmt(p.survivor_mib, 0)),
+      el("td", {}, fmt(p.old_mib, 0)), el("td", {}, p.tenuring_threshold),
+      el("td", {}, fmt(p.concurrent_trigger_ratio, 2)),
+      el("td", {}, fmt(p.concurrent_mark_mibs, 0)),
+      el("td", {}, fmt(r.pause_max_ms, 1)), el("td", {}, fmt(r.pause_p99_ms, 1)),
+      el("td", {}, pct(r.throughput_loss_frac, 2)),
+      el("td", {}, r.full_count),
+      el("td", {}, r.seeds || 1),
+      el("td", {}, el("span", { class: "pill " + (r.feasible ? "good" : "bad") },
+        r.feasible ? "是" : "否")),
+    ]));
+  }
+  host.appendChild(t);
+  host.appendChild(el("p", { class: "note" },
+    "尺寸单位 MiB，标记速率 MiB/s。种子数 > 1 表示该候选在多个随机流量种子上跑过，"
+    + "表中是它的最差一天。同一配置只保留一次（完整一天评估的结果优先）。"));
+}
+
+// ---------------------------------------------------------------------------
+// Calibration
+// ---------------------------------------------------------------------------
+function renderCalibration() {
+  const s = cur();
+  const which = $("#calibWhich").value;
+  const cal = s.calibration[which];
+  const host = $("#calibTable");
+  host.innerHTML = "";
+  const t = el("table");
+  t.appendChild(el("tr", {}, [el("th", {}, "参数"), el("th", {}, "真实值"),
+    el("th", {}, "从日志估出"), el("th", {}, "相对误差"), el("th", {}, "容差"),
+    el("th", {}, "结果"), el("th", {}, "备注")]));
+  for (const r of cal.rows) {
+    const ok = r.ok;
+    t.appendChild(el("tr", {}, [
+      el("td", {}, r.parameter),
+      el("td", {}, fmt(r.truth, 3) + " " + r.unit),
+      el("td", {}, r.estimated === null ? "—" : fmt(r.estimated, 3) + " " + r.unit),
+      el("td", {}, r.rel_error === null ? "—" : pct(r.rel_error, 1)),
+      el("td", {}, r.tolerance === 0 ? "精确" : "±" + pct(r.tolerance, 0)),
+      el("td", {}, el("span", { class: "pill " + (ok === true ? "good" : ok === false ? "bad" : "warn") },
+        ok === true ? "通过" : ok === false ? "偏差" : "不可辨识")),
+      el("td", { class: "note", style: "text-align:left" }, r.note || ""),
+    ]));
+  }
+  host.appendChild(t);
+  $("#calibNote").textContent =
+    `日志方言：${cal.dialect}；解析出 ${cal.events_parsed} 个事件；`
+    + `日志 ${cal.log_lines} 行 / ${(cal.log_bytes / 1024).toFixed(0)} KiB；`
+    + `通过 ${cal.passed}/${cal.total} 项。`;
+  $("#logExcerpt").textContent = cal.log_excerpt;
+  renderCalibOccupancy(cal);
+}
+
+function renderCalibOccupancy(cal) {
+  const host = $("#calibOccupancy");
+  host.innerHTML = "";
+  const occ = cal.estimates.occupancy || {};
+  const t = occ.t || [], old = occ.old || [];
+  if (!t.length) { host.innerHTML = `<p class="note">无数据</p>`; return; }
+  const maxV = Math.max(...old, 1);
+  const c = chart(host, {
+    height: 200, xMin: 0, xMax: t[t.length - 1] / 3600 || 1, yMin: 0, yMax: maxV * 1.1,
+    yLabel: "MiB", xFormat: v => `${fmt(v, 0)}h`, xTicks: 6,
+  });
+  c.g.appendChild(svgEl("path", {
+    d: areaPath(c, t.map((v, i) => [v / 3600, old[i]]), 0),
+    fill: PALETTE.old, opacity: 0.35 }));
+  c.g.appendChild(svgEl("path", {
+    d: linePath(c, t.map((v, i) => [v / 3600, old[i]])),
+    fill: "none", stroke: PALETTE.old, "stroke-width": 1.4 }));
+  host.appendChild(el("p", { class: "note" },
+    `从日志中“Heap after GC”行反推的老年代占用，峰值 ${fmt(maxV, 0)} MiB。`));
+}
+
+// ---------------------------------------------------------------------------
+// Render dispatch
+// ---------------------------------------------------------------------------
+function renderAll() {
+  $("#scenarioSelect").value = String(state.scenario);
+  $("#viewSelect").value = state.view;
+  renderOverview();
+  if (activeTab === "overview") { renderCompare(); renderPauseHist(); }
+  if (activeTab === "timeline") { renderTimeline(); renderPausePerMinute(); renderRates(); }
+  if (activeTab === "pauses") { renderPauseScatter(); renderPauseStats(); renderReasons(); }
+  if (activeTab === "ages") { renderAgeChart(); renderPromotedAge(); renderLifetime(); renderPromoteByClass(); }
+  if (activeTab === "tuning") { renderTuning(); renderEffects(); renderRanking(); }
+  if (activeTab === "calibration") { renderCalibration(); }
+}
+
+function boot() {
+  const sel = $("#scenarioSelect");
+  scenarios.forEach((s, i) => {
+    const o = el("option", { value: String(i) }, `${s.name} — ${s.description.slice(0, 26)}…`);
+    sel.appendChild(o);
+  });
+  sel.addEventListener("change", () => { state.scenario = +sel.value; renderAll(); });
+  $("#viewSelect").addEventListener("change", (e) => {
+    state.view = e.target.value; renderAll();
+  });
+  $("#calibWhich").addEventListener("change", () => renderCalibration());
+  DATA.populations = DATA.populations || {};
+  buildTabs();
+  renderAll();
+}
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(renderAll, 150);
+});
+boot();
+</script>
+</body>
+</html>

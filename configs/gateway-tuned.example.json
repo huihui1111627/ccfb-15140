@@ -1,0 +1,13 @@
+{
+  "name": "trading-gateway",
+  "description": "示例：把验收得到的推荐参数写成可直接回放的配置。",
+  "gc": {
+    "eden_bytes": 100663296,
+    "survivor_bytes": 4194304,
+    "old_bytes": 3221225472,
+    "tenuring_threshold": 6,
+    "concurrent_trigger_ratio": 0.6,
+    "concurrent_mark_bytes_per_s": 73400320
+  },
+  "heap_budget_mib": 6144
+}
