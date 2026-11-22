@@ -152,15 +152,10 @@ def parse_gc_log(text: str) -> List[GCEvent]:
         if not line.strip() or line.lstrip().startswith("#"):
             i += 1
             continue
-        if "concurrent" in low and "gc" in low and "pause" not in low:
-            m = _CONC.search(line)
-            phase = (m.group(1) if m else "mark").lower()
-            t = _event_time(line, prev_t)
-            events.append(GCEvent(t=t, kind="concurrent", cause="concurrent",
-                                  phase=phase, raw=line))
-            prev_t = max(prev_t, t)
-            i += 1
-            continue
+        # Full GC must be tested before the concurrent-phase branch: a
+        # concurrent-mode-failure full GC line contains the word "concurrent"
+        # in its cause and would otherwise be misclassified as a marking
+        # event.
         if "full gc" in low:
             m = _FULL_LINE.search(line)
             t = _event_time(line, prev_t)
@@ -179,6 +174,15 @@ def parse_gc_log(text: str) -> List[GCEvent]:
                     t=t, kind="full", cause="Full GC",
                     pause_s=float(pm.group(1)) if pm else 0.0, raw=line,
                 ))
+            prev_t = max(prev_t, t)
+            i += 1
+            continue
+        if "concurrent" in low and "gc" in low and "pause" not in low:
+            m = _CONC.search(line)
+            phase = (m.group(1) if m else "mark").lower()
+            t = _event_time(line, prev_t)
+            events.append(GCEvent(t=t, kind="concurrent", cause="concurrent",
+                                  phase=phase, raw=line))
             prev_t = max(prev_t, t)
             i += 1
             continue

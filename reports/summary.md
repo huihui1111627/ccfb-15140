@@ -1,6 +1,6 @@
 # Generational GC tuning report
 
-Generated 2026-11-23T06:48:05
+Generated 2026-11-23T07:09:48
 
 Every number below comes from the simulator in `gcsim/`. Pauses, promotion and heap figures are model output; the reverse-calibration table at the end of each section shows how well the log estimator recovers the known parameters.
 

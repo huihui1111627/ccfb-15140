@@ -307,6 +307,8 @@ def render_page(bundle: dict) -> str:
         add_col2("hourly", "STW seconds per hour of day")
         if "compare_pauses" in sc_charts:
             add_col2("compare_pauses", "Pause percentiles: before/after")
+        if "compare_metrics" in sc_charts:
+            add_col2("compare_metrics", "Key metrics: before/after")
 
         tune_html = ""
         if s.get("tuning"):

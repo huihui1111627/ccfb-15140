@@ -463,3 +463,19 @@ def test_page_tables_balanced():
                         "charts": sc["charts"]})
     assert html.count("<table") == html.count("</table>")
     assert html.count("<svg") == html.count("</svg>")
+
+
+def test_parser_handles_concurrent_mode_failure_full_gc():
+    """Regression: a full GC whose cause contains 'concurrent' (Concurrent
+    Mode Failure) must be parsed as a full GC, not a concurrent marking
+    event.  Getting this wrong silently hides the worst pauses from
+    calibration."""
+    text = (
+        "2026-11-23T09:12:02.903: [[33122.903287s]] Full GC "
+        "(Concurrent Mode Failure) 3.3G->2.2G(5.0G), 1.0308566 secs\n"
+    )
+    ev = parse_gc_log(text)
+    assert len(ev) == 1
+    assert ev[0].kind == "full"
+    assert abs(ev[0].pause_s - 1.0308566) < 1e-6
+    assert abs(ev[0].heap_after - 2.2 * GB) < 1e6

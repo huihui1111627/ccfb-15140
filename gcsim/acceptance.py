@@ -157,6 +157,7 @@ def scenario(service_name: str, traffic_name: str,
         charts["occupancy_tuned"] = charts_t["occupancy"]
         charts["age_hist_tuned"] = charts_t["age_hist"]
         charts["compare_pauses"] = _compare_pause_chart(base_digest, tuned_digest)
+        charts["compare_metrics"] = _compare_metrics_chart(base_digest, tuned_digest)
     # 4. Reverse calibration from a simulated log.
     cal = None
     log_path = None
